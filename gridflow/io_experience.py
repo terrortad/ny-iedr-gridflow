@@ -8,21 +8,16 @@ def build_customer_usage_summary(
     window: str = "D",
 ) -> pd.DataFrame:
     """
-    Experience (Platinum) layer summarizing usage per service point
-    over a time window (default: daily).
-
-    Handles mixed timestamp formats and missing IDs by:
-      - coercing invalid timestamps to NaT and dropping those rows
-      - filling missing utility_id/service_point_id with explicit markers
+    Aggregate usage per service point over a time window (default: daily).
+    Calculates total usage, interval count, peak and pit values with timestamps.
     """
-
     df = customer_usage_interval.copy()
 
-    # Make sure IDs are usable for grouping
+    # Fill missing IDs so groupby doesnt drop rows
     df["utility_id"] = df["utility_id"].fillna("UNKNOWN_UTILITY")
     df["service_point_id"] = df["service_point_id"].fillna("UNKNOWN_SERVICE_POINT")
 
-    # Robust timestamp parsing, allow mixed formats
+    # Parse timestamps - drop rows where parsing fails
     df["interval_start_ts"] = pd.to_datetime(
         df["interval_start_ts"].astype(str),
         errors="coerce",
@@ -46,16 +41,17 @@ def build_customer_usage_summary(
             ]
         )
 
-    # Drop timezone before converting to Period to avoid warnings
+    # Remove timezone for Period conversion
     df["interval_start_ts"] = df["interval_start_ts"].dt.tz_convert(None)
 
+    # Create time buckets
     periods = df["interval_start_ts"].dt.to_period(window)
     df["bucket_start"] = periods.dt.start_time
     df["bucket_end"] = periods.dt.end_time
 
     grouping_cols = ["utility_id", "service_point_id", "bucket_start", "bucket_end"]
 
-    # Total usage per bucket
+    # Totals
     agg_total = (
         df.groupby(grouping_cols)
         .agg(
@@ -74,7 +70,7 @@ def build_customer_usage_summary(
         }
     )
 
-    # Lowest usage per bucket
+    # Pit (lowest) usage per bucket
     pit_idx = df.groupby(grouping_cols)["value"].idxmin()
     pit = df.loc[pit_idx, grouping_cols + ["value", "interval_start_ts"]].rename(
         columns={

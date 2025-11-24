@@ -5,25 +5,18 @@ import pandas as pd
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Lowercase and strip column names to keep mappings consistent."""
+    """Lowercase and strip whitespace from column names."""
     out = df.copy()
     out.columns = [c.strip().lower() for c in out.columns]
     return out
 
 
 # ---------------------------
-# Service points (Utility 1 & 2)
+# Service Points
 # ---------------------------
 
 def standardize_utility1_service_points(raw_sp: pd.DataFrame) -> pd.DataFrame:
-    """
-    Map utility1_service_points.csv into the common service_point model.
-
-    Utility 1 columns:
-      SERVICE_POINT_ID, SERVICE_POINT_NUMBER, SERVICE_POINT_STREET,
-      SERVICE_POINT_CITY, SERVICE_POINT_ZIP, SERVICE_POINT_STATE,
-      INSTALLED_AT, REMOVED_AT, CREATED, UPDATED
-    """
+    """Utility 1 uses SERVICE_POINT_ID and all-caps column names."""
     df = _normalize_columns(raw_sp)
 
     standardized = pd.DataFrame()
@@ -45,13 +38,7 @@ def standardize_utility1_service_points(raw_sp: pd.DataFrame) -> pd.DataFrame:
 
 
 def standardize_utility2_service_points(raw_sp: pd.DataFrame) -> pd.DataFrame:
-    """
-    Map utility2_service_points.csv into the common service_point model.
-
-    Utility 2 columns:
-      premise_id, created_date, premise_house_num, premise_street,
-      premise_house_supp, premise_city, premise_zip, premise_region
-    """
+    """Utility 2 uses premise_id instead of service_point_id."""
     df = _normalize_columns(raw_sp)
 
     standardized = pd.DataFrame()
@@ -75,14 +62,14 @@ def standardize_utility2_service_points(raw_sp: pd.DataFrame) -> pd.DataFrame:
 def build_standardized_service_points(
     raw_all: Dict[str, Dict[str, pd.DataFrame]]
 ) -> pd.DataFrame:
-    """Combined standardized service_point table across utilities."""
+    """Combine service points from both utilities into one table."""
     u1_sp = standardize_utility1_service_points(raw_all["utility1"]["service_points"])
     u2_sp = standardize_utility2_service_points(raw_all["utility2"]["service_points"])
 
     combined = pd.concat([u1_sp, u2_sp], ignore_index=True)
     combined = combined.drop_duplicates(subset=["utility_id", "service_point_id"])
 
-    # As a safety net, if utility_id is ever missing, infer from ID pattern
+    # Fallback if utility_id is missing - infer from ID format
     combined["utility_id"] = combined["utility_id"].fillna(
         combined["service_point_id"].astype(str).apply(
             lambda sp: "UTILITY1" if sp.startswith("SP-") else "UTILITY2"
@@ -93,57 +80,50 @@ def build_standardized_service_points(
 
 
 # ---------------------------
-# Meters (Utility 1 & 2)
+# Meters
 # ---------------------------
 
 def standardize_meters(
     raw_all: Dict[str, Dict[str, pd.DataFrame]]
 ) -> pd.DataFrame:
     """
-    Standardize meter metadata.
-
-    Utility 1 meters (utility1_meters.csv):
-      meter_id, meter_timestamp, meter_duration, meter_value,
-      meter_type, meter_category
-
-    Utility 2 meters (utility2_meters.csv):
-      premise_id, meter_id, meter_number, meter_type,
-      meter_status, meter_channel, installed_at, removed_at,
-      created, updated
+    Combine meters from both utilities.
+    Utility 2 meters link to premise_id (service point). Utility 1 meters dont have that link.
     """
     # Utility 1
     u1_raw = _normalize_columns(raw_all["utility1"]["meters"])
-    u1 = pd.DataFrame()
-    u1["utility_id"] = "UTILITY1"
-    u1["meter_id"] = u1_raw["meter_id"]
-    u1["serial_number"] = u1_raw["meter_id"]
-    u1["meter_type"] = u1_raw.get("meter_type")
-    u1["meter_category"] = u1_raw.get("meter_category")
-    # No direct mapping to service point in this file
-    u1["service_point_id"] = None
-    u1["installed_at"] = None
-    u1["removed_at"] = None
-    u1["created_at"] = None
-    u1["updated_at"] = None
+    u1 = pd.DataFrame({
+        "utility_id": "UTILITY1",
+        "meter_id": u1_raw["meter_id"].astype(str),
+        "serial_number": u1_raw["meter_id"].astype(str),
+        "meter_type": u1_raw.get("meter_type"),
+        "meter_category": u1_raw.get("meter_category"),
+        "service_point_id": None,
+        "installed_at": None,
+        "removed_at": None,
+        "created_at": None,
+        "updated_at": None,
+    })
 
     # Utility 2
     u2_raw = _normalize_columns(raw_all["utility2"]["meters"])
-    u2 = pd.DataFrame()
-    u2["utility_id"] = "UTILITY2"
-    u2["meter_id"] = u2_raw["meter_id"]
-    u2["serial_number"] = u2_raw["meter_number"]
-    u2["meter_type"] = u2_raw["meter_type"]
-    u2["meter_category"] = u2_raw.get("meter_channel")
-    u2["service_point_id"] = u2_raw["premise_id"]
-    u2["installed_at"] = u2_raw.get("installed_at")
-    u2["removed_at"] = u2_raw.get("removed_at")
-    u2["created_at"] = u2_raw.get("created")
-    u2["updated_at"] = u2_raw.get("updated")
+    u2 = pd.DataFrame({
+        "utility_id": "UTILITY2",
+        "meter_id": u2_raw["meter_id"].astype(str),
+        "serial_number": u2_raw["meter_number"].astype(str),
+        "meter_type": u2_raw["meter_type"],
+        "meter_category": u2_raw.get("meter_channel"),
+        "service_point_id": u2_raw["premise_id"],
+        "installed_at": u2_raw.get("installed_at"),
+        "removed_at": u2_raw.get("removed_at"),
+        "created_at": u2_raw.get("created"),
+        "updated_at": u2_raw.get("updated"),
+    })
 
     combined = pd.concat([u1, u2], ignore_index=True)
     combined = combined.drop_duplicates(subset=["utility_id", "meter_id"])
 
-    # Safety net for utility_id
+    # Fallback if utility_id is missing
     combined["utility_id"] = combined["utility_id"].fillna(
         combined["service_point_id"]
         .combine_first(combined["meter_id"])
@@ -157,11 +137,11 @@ def standardize_meters(
 
 
 # ---------------------------
-# Intervals (Utility 1 & 2)
+# Intervals
 # ---------------------------
 
 def _add_interval_end(df: pd.DataFrame) -> pd.DataFrame:
-    """Given interval_start_ts + duration_seconds, compute interval_end_ts."""
+    """Calculate interval_end_ts from start time + duration."""
     out = df.copy()
     start = pd.to_datetime(out["interval_start_ts"], errors="coerce", utc=True)
     duration = pd.to_numeric(out["duration_seconds"], errors="coerce").fillna(0)
@@ -174,58 +154,55 @@ def standardize_intervals(
     raw_all: Dict[str, Dict[str, pd.DataFrame]]
 ) -> pd.DataFrame:
     """
-    Standardize interval readings.
-
-    Utility 1 intervals (utility1_intervals.csv):
-      service_delivery_point_id, meter_id, channel, duration, value,
-      quality, timestamp, last_update_time, exported_at
-
-    Utility 2 intervals (utility2_intervals.csv):
-      channel, duration, meter_id, quality, timestamp, value
-
-    For Utility 2, service_point_id is derived via meters (premise_id).
+    Combine interval readings from both utilities.
+    
+    Utility 1 includes service_delivery_point_id directly.
+    Utility 2 only has meter_id - we join through meters to get service_point_id.
+    Utility 2 timestamps are YYYYMMDD integers, not ISO strings.
     """
     meters_std = standardize_meters(raw_all)
 
     # Utility 1
     u1_raw = _normalize_columns(raw_all["utility1"]["intervals"])
-    u1 = pd.DataFrame()
-    u1["utility_id"] = "UTILITY1"
-    u1["service_point_id"] = u1_raw["service_delivery_point_id"]
-    u1["meter_id"] = u1_raw["meter_id"]
-    u1["interval_start_ts"] = u1_raw["timestamp"]
-    u1["duration_seconds"] = pd.to_numeric(u1_raw["duration"], errors="coerce")
-    u1["value"] = pd.to_numeric(u1_raw["value"], errors="coerce")
-    u1["quality"] = u1_raw["quality"]
-    u1["channel"] = u1_raw["channel"]
-    u1["last_update_time"] = u1_raw.get("last_update_time")
-    u1["exported_at"] = u1_raw.get("exported_at")
-
+    u1 = pd.DataFrame({
+        "utility_id": "UTILITY1",
+        "service_point_id": u1_raw["service_delivery_point_id"],
+        "meter_id": u1_raw["meter_id"].astype(str),
+        "interval_start_ts": u1_raw["timestamp"],
+        "duration_seconds": pd.to_numeric(u1_raw["duration"], errors="coerce"),
+        "value": pd.to_numeric(u1_raw["value"], errors="coerce"),
+        "quality": u1_raw["quality"],
+        "channel": u1_raw["channel"],
+        "last_update_time": u1_raw.get("last_update_time"),
+        "exported_at": u1_raw.get("exported_at"),
+    })
     u1 = _add_interval_end(u1)
 
-    # Utility 2
+    # Utility 2 - timestamps are YYYYMMDD integers
     u2_raw = _normalize_columns(raw_all["utility2"]["intervals"])
-    u2_base = pd.DataFrame()
-    u2_base["utility_id"] = "UTILITY2"
-    u2_base["meter_id"] = u2_raw["meter_id"]
-    u2_base["interval_start_ts"] = u2_raw["timestamp"]
-    u2_base["duration_seconds"] = pd.to_numeric(u2_raw["duration"], errors="coerce")
-    u2_base["value"] = pd.to_numeric(u2_raw["value"], errors="coerce")
-    u2_base["quality"] = u2_raw["quality"]
-    u2_base["channel"] = u2_raw["channel"]
-    u2_base["last_update_time"] = None
-    u2_base["exported_at"] = None
+    u2_base = pd.DataFrame({
+        "utility_id": "UTILITY2",
+        "meter_id": u2_raw["meter_id"].astype(str),
+        "interval_start_ts": pd.to_datetime(u2_raw["timestamp"].astype(str), format="%Y%m%d", errors="coerce"),
+        "duration_seconds": pd.to_numeric(u2_raw["duration"], errors="coerce"),
+        "value": pd.to_numeric(u2_raw["value"], errors="coerce"),
+        "quality": u2_raw["quality"],
+        "channel": u2_raw["channel"],
+        "last_update_time": None,
+        "exported_at": None,
+    })
 
-    # Attach service_point_id via standardized meters (utility2)
+    # Get service_point_id by joining to meters
     meters_u2 = meters_std[meters_std["utility_id"] == "UTILITY2"][
         ["utility_id", "meter_id", "service_point_id"]
-    ]
+    ].copy()
+    meters_u2["meter_id"] = meters_u2["meter_id"].astype(str)
+
     u2 = u2_base.merge(
         meters_u2,
         on=["utility_id", "meter_id"],
         how="left",
     )
-
     u2 = _add_interval_end(u2)
 
     combined = pd.concat([u1, u2], ignore_index=True)
@@ -233,7 +210,7 @@ def standardize_intervals(
         subset=["utility_id", "service_point_id", "meter_id", "interval_start_ts"]
     )
 
-    # Safety net for utility_id
+    # Fallback if utility_id is missing
     combined["utility_id"] = combined["utility_id"].fillna(
         combined["service_point_id"]
         .combine_first(combined["meter_id"])
