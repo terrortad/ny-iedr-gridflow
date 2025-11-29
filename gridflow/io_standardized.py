@@ -207,7 +207,7 @@ def standardize_intervals(
 
     combined = pd.concat([u1, u2], ignore_index=True)
     combined = combined.drop_duplicates(
-        subset=["utility_id", "service_point_id", "meter_id", "interval_start_ts"]
+        subset=["utility_id", "service_point_id", "meter_id", "interval_start_ts", "channel"]
     )
 
     # Fallback if utility_id is missing
