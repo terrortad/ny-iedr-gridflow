@@ -67,6 +67,15 @@ def build_standardized_service_points(
     u2_sp = standardize_utility2_service_points(raw_all["utility2"]["service_points"])
 
     combined = pd.concat([u1_sp, u2_sp], ignore_index=True)
+
+    # NOTE: Current implementation does full refresh for prototype.
+    # Production would use Delta MERGE for incremental monthly updates:
+    #   MERGE INTO silver.service_points USING staging
+    #   ON target.utility_id = source.utility_id 
+    #      AND target.service_point_id = source.service_point_id
+    #   WHEN MATCHED THEN UPDATE SET *
+    #   WHEN NOT MATCHED THEN INSERT *
+    
     combined = combined.drop_duplicates(subset=["utility_id", "service_point_id"])
 
     # Fallback if utility_id is missing - infer from ID format

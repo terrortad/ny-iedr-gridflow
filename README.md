@@ -8,22 +8,24 @@ This repo is my take on the IEDR data pipeline case study: take messy, utility-s
 
 The case provides sample data from two different NY utilities. They describe the same concepts (service points, meters, interval usage) but in very different ways:
 
-- **Utility 1**
-  - Uses `SERVICE_POINT_ID`
-  - Sends interval timestamps as ISO-like strings
-  - Includes the service point directly on the intervals
+* **Utility 1**
 
-- **Utility 2**
-  - Uses `premise_id` instead of service point ID
-  - Sends timestamps as integers like `20250123`
-  - Only gives `meter_id` on intervals; you have to join through meters to get to the service point
+  * Uses `SERVICE_POINT_ID`
+  * Sends interval timestamps as ISO-like strings
+  * Includes the service point directly on the intervals
+
+* **Utility 2**
+
+  * Uses `premise_id` instead of service point ID
+  * Sends timestamps as integers like `20250123`
+  * Only gives `meter_id` on intervals; you have to join through meters to get to the service point
 
 The IEDR application **doesn’t** want to know about any of that. It just wants:
 
-- A **common data model** across utilities  
-- A **single usage table** to query for customer usage patterns  
-- A **summary layer** for “peak/pit usage by location and day”  
-- Clear signals when data is **missing, mis-joined, or out of range**
+* A **common data model** across utilities
+* A **single usage table** to query for customer usage patterns
+* A **summary layer** for “peak/pit usage by location and day”
+* Clear signals when data is **missing, mis-joined, or out of range**
 
 This project is meant to demonstrate that end-to-end: from raw CSVs → standardized model → usage fact table → daily experience layer → data quality snapshot.
 
@@ -42,28 +44,31 @@ I modeled this as a medallion-style pipeline, similar to how I’d implement it 
 
 ### 1. Landing (Raw)
 
-- Location: `data/raw/utility1`, `data/raw/utility2`
-- Behavior: load CSVs as-is (no transformations), one directory per utility:
+* Location: `data/raw/utility1`, `data/raw/utility2`
 
-  - `utility*_service_points.csv`
-  - `utility*_meters.csv`
-  - `utility*_intervals.csv`
+* Behavior: load CSVs as-is (no transformations), one directory per utility:
 
-- Code: [`gridflow/io_landing.py`](gridflow/io_landing.py)
+  * `utility*_service_points.csv`
+  * `utility*_meters.csv`
+  * `utility*_intervals.csv`
+
+* Code: [`gridflow/io_landing.py`](gridflow/io_landing.py)
 
 This layer is about making I/O explicit and testable, not clever.
 
 **Example raw volumes:**
 
-- **UTILITY1**
-  - ~1,039 service points  
-  - ~2,842 meters  
-  - 211 interval rows  
+* **UTILITY1**
 
-- **UTILITY2**
-  - ~967 service points  
-  - ~2,665 meters  
-  - 43,152 interval rows (noisy, highly duplicated)
+  * ~1,039 service points
+  * ~2,842 meters
+  * 211 interval rows
+
+* **UTILITY2**
+
+  * ~967 service points
+  * ~2,665 meters
+  * 43,152 interval rows (noisy, highly duplicated)
 
 ---
 
@@ -71,85 +76,91 @@ This layer is about making I/O explicit and testable, not clever.
 
 This layer hides the utility-specific quirks and presents a **common schema** for:
 
-- Service points  
-- Meters  
-- Interval readings  
+* Service points
+* Meters
+* Interval readings
 
 Key pieces live in [`gridflow/io_standardized.py`](gridflow/io_standardized.py).
 
 #### Service points – `build_standardized_service_points`
 
-- **Utility 1**
-  - `SERVICE_POINT_ID` → `service_point_id`
-  - Address columns (`SERVICE_POINT_STREET`, `SERVICE_POINT_CITY`, etc.) → unified location fields
+* **Utility 1**
 
-- **Utility 2**
-  - `premise_id` → `service_point_id`
-  - `premise_house_num`, `premise_street`, `premise_city`, `premise_zip`, `premise_region` → aligned to the same structure
+  * `SERVICE_POINT_ID` → `service_point_id`
+  * Address columns (`SERVICE_POINT_STREET`, `SERVICE_POINT_CITY`, etc.) → unified location fields
+
+* **Utility 2**
+
+  * `premise_id` → `service_point_id`
+  * `premise_house_num`, `premise_street`, `premise_city`, `premise_zip`, `premise_region` → aligned to the same structure
 
 **Result:** a single `service_points` table with:
 
-- `utility_id`
-- `service_point_id`
-- Address/location fields
-- Installed/removed/created timestamps where available
+* `utility_id`
+* `service_point_id`
+* Address/location fields
+* Installed/removed/created timestamps where available
 
 > In the standardized layer, some Utility 2 service points are dropped because they never link to any meter/interval data. The DQ snapshot calls this out explicitly.
 
 #### Meters – `build_standardized_meters`
 
-- **Utility 1**
-  - `meter_id` normalized to string
-  - No direct service point link in the file, so `service_point_id` is left null  
+* **Utility 1**
+
+  * `meter_id` normalized to string
+  * No direct service point link in the file, so `service_point_id` is left null
     (future enhancement could infer this from additional data)
 
-- **Utility 2**
-  - `meter_id` and `meter_number` normalized
-  - `premise_id` carried through as `service_point_id`
-  - Installed/removed/created timestamps retained
+* **Utility 2**
+
+  * `meter_id` and `meter_number` normalized
+  * `premise_id` carried through as `service_point_id`
+  * Installed/removed/created timestamps retained
 
 **Result:** a single `meters` table with:
 
-- `utility_id`
-- `meter_id` (string)
-- `service_point_id` (populated for Utility 2)
-- Meter type, category, timestamps
+* `utility_id`
+* `meter_id` (string)
+* `service_point_id` (populated for Utility 2)
+* Meter type, category, timestamps
 
 #### Intervals – `build_standardized_intervals`
 
-- **Utility 1**
-  - Carries `service_delivery_point_id` directly → `service_point_id`
-  - Timestamps taken from an ISO-like `timestamp` column
+* **Utility 1**
 
-- **Utility 2**
-  - Timestamps are integers like `20250123`
-  - Explicitly parsed with `pd.to_datetime(..., format="%Y%m%d")`
-  - Only has `meter_id` → we join through the standardized `meters` table to get `service_point_id`
+  * Carries `service_delivery_point_id` directly → `service_point_id`
+  * Timestamps taken from an ISO-like `timestamp` column
+
+* **Utility 2**
+
+  * Timestamps are integers like `20250123`
+  * Explicitly parsed with `pd.to_datetime(..., format="%Y%m%d")`
+  * Only has `meter_id` → we join through the standardized `meters` table to get `service_point_id`
 
 Both utilities are then enriched with a common set of fields:
 
-- `utility_id`
-- `service_point_id`
-- `meter_id`
-- `interval_start_ts`
-- `interval_end_ts` (computed from duration)
-- `duration_seconds`
-- `value` (usage amount)
-- `quality`
-- `channel` (e.g. kWh, kVARh, etc.)
+* `utility_id`
+* `service_point_id`
+* `meter_id`
+* `interval_start_ts`
+* `interval_end_ts` (computed from duration)
+* `duration_seconds`
+* `value` (usage amount)
+* `quality`
+* `channel` (e.g. kWh, kVARh, etc.)
 
 **Deduplication**
 
 Utility 2’s interval file is extremely noisy and includes:
 
-- multiple channels per meter/timestamp, and  
-- many true duplicate rows.
+* multiple channels per meter/timestamp, and
+* many true duplicate rows.
 
 The final dedup key is:
 
 ```python
 ["utility_id", "service_point_id", "meter_id", "interval_start_ts", "channel"]
-````
+```
 
 This preserves **distinct measurement channels** (e.g. kWh vs kVARh) while collapsing true duplicates.
 
@@ -338,6 +349,30 @@ The case hints at PII (addresses, etc.). In a real implementation:
   * role-based access controls around any PII-bearing columns.
 
 This repo keeps PII inline for simplicity, but the model is structured to support those controls.
+
+---
+
+## PII & Security Controls
+
+PII masking is implemented in `gridflow/io_security.py`.
+
+**Masked fields:**
+
+* `street`, `house_num`, `house_supp` → fully masked
+* `zip` → truncated to ZIP3 (e.g., `"58291"` → `"582**"`)
+
+**Access levels:**
+
+* `external` (default): Masked for app/API consumers
+* `internal`: Full access for pipeline/governance use
+
+The Product layer applies masking via a `pii_access_level` parameter:
+
+```python
+usage = build_customer_usage_interval(sp, mt, iv, pii_access_level="external")
+```
+
+In production Databricks, this would use Unity Catalog dynamic data masking and column-level security.
 
 ---
 
@@ -538,6 +573,7 @@ gridflow/
   io_standardized.py   # map U1/U2 into a common schema (SPs, meters, intervals)
   io_product.py        # build detailed usage fact table (Product layer)
   io_experience.py     # build daily summaries with peak/pit usage (Experience layer)
+  io_security.py       # PII masking and access-level controls
   pipelines/
     load_landing.py        # pipeline entrypoint: load raw data
     build_standardized.py  # pipeline entrypoint: build standardized layer
@@ -630,9 +666,3 @@ With the Product and Experience layers in place, the IEDR platform can:
   * retrieval pipelines for a future chatbot over IEDR data and documentation.
 
 The main goal of this repo is to show how I’d structure the pipelines, enforce data quality, and create layers that are simple for the IEDR app and data science teams to consume, all while making upstream data issues visible instead of sweeping them under the rug.
-
-```
-
----
-
-
